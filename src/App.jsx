@@ -626,7 +626,6 @@ function Register({onBack, onDone}) {
     }
     if(s===3){
       if(f.username.length<4) e.username="Minimum 4 characters";
-      if(DB.users.find(u=>u.username===f.username)) e.username="Username already taken";
       const pwdOk=/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_+\-=\[\]{};:.><\/?@]).{7,}$/.test(f.password);
       if(!pwdOk) e.password="Min 7 chars with uppercase, lowercase, number & special character (e.g. !@#$)";
       if(f.password!==f.confirm) e.confirm="Passwords do not match";
@@ -743,7 +742,7 @@ function AdminPanel({admin, onLogout}) {
   const [tick, setTick] = useState(0);
   const refresh=()=>{ setTick(t=>t+1); };
   const [emailModal, setEmailModal] = useState(null);
-  const doApprove=(id)=>{ const u=DB.approve(id); refresh(); if(u) setEmailModal({name:u.fullName,email:u.email,username:u.username}); };
+  const doApprove=async(id)=>{ const u=await DB.approve(id); refresh(); if(u) setEmailModal({name:u.fullName,email:u.email,username:u.username}); };
 
   const [users, setUsers] = useState([]);
   const [docs, setDocs] = useState([]);
@@ -764,7 +763,7 @@ function AdminPanel({admin, onLogout}) {
   const pending = users.filter(u=>u.status==="pending");
   const approved = users.filter(u=>u.status==="approved");
 
-  const pendingDocsList=DB.pendingDocs();
+  const pendingDocsList=docs.filter(d=>d.status==="pending");
   const TABS=[
     {id:"overview",label:"Overview",icon:"📊"},
     {id:"registrations",label:"Registrations",icon:"📝",badge:pending.length},
@@ -981,14 +980,14 @@ function DocManager({refresh}) {
     return e;
   };
 
-  const add=()=>{
+  const add=async()=>{
     const e=validate(); if(Object.keys(e).length){setErrors(e);return;}
-    DB.addDoc({id:`p${Date.now()}`,...f,available:true,addedAt:new Date().toISOString().split("T")[0]});
-    DB.activities.push({id:`a${Date.now()}`,type:"psychiatrist",user:"Admin",detail:`Added professional: ${f.name}`,time:new Date().toLocaleString(),icon:"🩺"});
+    await DB.addDoc({...f,available:true});
+    await sb.insert("activities",{type:"psychiatrist",actor:"Admin",detail:`Added professional: ${f.name}`,icon:"🩺"});
     setF({name:"",title:"",spec:"",phone:"",email:"",facility:""}); setErrors({}); setShowAdd(false); re();
   };
 
-  const docs=DB.psychiatrists;
+  const [docs,setDocs]=useState([]); useEffect(()=>{ DB.getDirectory().then(d=>setDocs(d||[])).catch(()=>{}); },[tick]);
   return (
     <div style={{display:"flex",flexDirection:"column",gap:16,animation:"fadeUp 0.3s ease"}}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
@@ -1880,7 +1879,7 @@ function Groups({user}) {
 
 // ── AI Chat ───────────────────────────────────────────────────────────────────
 function AIChat({user}) {
-  const [msgs, setMsgs] = useState([{role:"assistant",content:`Karibu ${user.fullName?.split(" ")[0]}! 🌿 I’m your Sereni AI companion. I’m here to listen, support, and guide you. How are you feeling today?`}]);
+  const [msgs, setMsgs] = useState([{role:"assistant",content:`Karibu ${user.fullName?.split(" ")[0]}! 🌿 I'm your Sereni AI companion. I'm here to listen, support, and guide you. How are you feeling today?`}]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [lang, setLang] = useState("en");
@@ -1957,10 +1956,10 @@ function UserManagement({users, doApprove, refresh}) {
                 {blocked&&<div style={{fontSize:11,color:T.severe,marginTop:3}}>🔒 Locked for {Math.floor(minsLeft/60)}h {minsLeft%60}m {u.blockedByAdmin?"(admin block)":"(failed attempts)"}</div>}
               </div>
               <div style={{display:"flex",flexDirection:"column",gap:6,flexShrink:0}}>
-                {u.status==="pending"&&<><Btn size="sm" color={T.mild} onClick={()=>doApprove(u.id)}>Approve</Btn><Btn size="sm" variant="danger" onClick={()=>{DB.reject(u.id);re();}}>Reject</Btn></>}
+                {u.status==="pending"&&<><Btn size="sm" color={T.mild} onClick={()=>doApprove(u.id)}>Approve</Btn><Btn size="sm" variant="danger" onClick={async()=>{await DB.reject(u.id);re();}}>Reject</Btn></>}
                 {u.status==="approved"&&!blocked&&<Btn size="sm" variant="danger" onClick={()=>{DB.blockUser(u.id);re();}}>🚫 Block</Btn>}
                 {blocked&&<Btn size="sm" variant="soft" onClick={()=>{DB.unblockUser(u.id);re();}}>🔓 Unblock</Btn>}
-                {(u.status==="approved"||u.status==="pending")&&<Btn size="sm" variant="ghost" color={T.muted} onClick={()=>{DB.cancelReg(u.id);re();}}>🗑️ Cancel Reg</Btn>}
+                {(u.status==="approved"||u.status==="pending")&&<Btn size="sm" variant="ghost" color={T.muted} onClick={async()=>{await DB.cancelReg(u.id);re();}}>🗑️ Cancel Reg</Btn>}
               </div>
             </div>
           </Card>
@@ -1978,11 +1977,12 @@ function AdminDoctors({refresh}) {
   const [tick, setTick] = useState(0);
   const re=()=>{ setTick(t=>t+1); refresh(); };
   const [emailModal, setEmailModal] = useState(null);
-  const docs = DB.docAccounts;
-  const pending = DB.pendingDocs();
+  const [docs, setDocs] = useState([]);
+  useEffect(()=>{ DB.getPsychiatrists().then(d=>setDocs(d||[])).catch(()=>{}); },[tick]);
+  const pending = docs.filter(d=>d.status==="pending");
 
-  const doApproveDoc=(id)=>{
-    const d=DB.approveDoc(id); re();
+  const doApproveDoc=async(id)=>{
+    const d=await DB.approveDoc(id); re();
     if(d) setEmailModal({name:d.fullName, email:d.email, username:d.username, license:d.licenseNo});
   };
 
@@ -2213,7 +2213,7 @@ function Therapists({user, sw=false}) {
   const [sessionType, setSessionType] = useState({});
   const [mapFacility, setMapFacility] = useState(null);
   const [physBooked, setPhysBooked] = useState({});
-  const docs=DB.psychiatrists;
+  const [docs,setDocs]=useState([]); useEffect(()=>{ DB.getDirectory().then(d=>setDocs(d||[])).catch(()=>{}); },[tick]);
 
   return (
     <div style={{display:"flex",flexDirection:"column",gap:16,animation:"fadeUp 0.3s ease"}}>
@@ -2310,7 +2310,7 @@ function DocRegister({onBack, onDone}) {
     }
     if(s===4){
       if(f.username.length<4) e.username="Min 4 characters";
-      if(DB.docAccounts.find(d=>d.username===f.username)) e.username="Username already taken";
+      // username uniqueness enforced by Supabase unique constraint
       const pwdOk=/^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*()_+\-=\[\]{};:.><\/?@]).{7,}$/.test(f.password);
       if(!pwdOk) e.password="Min 7 chars: uppercase, lowercase, number & special character";
       if(f.password!==f.confirm) e.confirm="Passwords do not match";
@@ -2439,7 +2439,7 @@ function DocRegister({onBack, onDone}) {
 function DoctorPortal({doc, onLogout}) {
   const [tab, setTab] = useState("dashboard");
   const [docData, setDocData] = useState(doc);
-  const refresh=()=>{ const d=DB.docAccounts.find(d=>d.id===doc.id); if(d) setDocData({...d}); };
+  const refresh=()=>{ DB.getPsychiatrists().then(all=>{ const d=(all||[]).find(d=>d.id===doc.id); if(d) setDocData({...d}); }).catch(()=>{}); };
 
   const TABS=[
     {id:"dashboard",label:"Dashboard",icon:"📊"},
@@ -2551,7 +2551,7 @@ function DocAppointments({doc, refresh}) {
   const filtered=filter==="all"?appts:appts.filter(a=>a.status===filter);
 
   const updateStatus=(id,status)=>{
-    const d=DB.docAccounts.find(d=>d.id===doc.id);
+    const d=docData;
     if(d){ const a=d.appointments.find(a=>a.id===id); if(a) a.status=status; refresh(); }
   };
 
@@ -2605,7 +2605,7 @@ function DocAvailability({doc, refresh}) {
   };
 
   const save=()=>{
-    const d=DB.docAccounts.find(d=>d.id===doc.id);
+    const d=docData;
     if(d){ d.availability=avail; setSaved(true); refresh(); setTimeout(()=>setSaved(false),2500); }
   };
 
@@ -2652,12 +2652,12 @@ function DocMessages({doc, refresh}) {
   const unread=notifs.filter(n=>!n.read);
 
   const markRead=(id)=>{
-    const d=DB.docAccounts.find(d=>d.id===doc.id);
+    const d=docData;
     if(d){ const n=d.notifications.find(n=>n.id===id); if(n) n.read=true; refresh(); }
   };
 
   const markAllRead=()=>{
-    const d=DB.docAccounts.find(d=>d.id===doc.id);
+    const d=docData;
     if(d){ d.notifications.forEach(n=>n.read=true); refresh(); }
   };
 
@@ -2709,7 +2709,7 @@ function DocProfile({doc, refresh}) {
   const set=(k,v)=>setF(p=>({...p,[k]:v}));
 
   const save=()=>{
-    const d=DB.docAccounts.find(d=>d.id===doc.id);
+    const d=docData;
     if(d){ Object.assign(d,f); setSaved(true); refresh(); setEditing(false); setTimeout(()=>setSaved(false),2500); }
   };
 
@@ -3129,15 +3129,14 @@ function MpesaPayment({user, sw=false}) {
 // PROGRESS REPORT (Doctor reviews patient reports)
 // ═══════════════════════════════════════════════════════════════════════════════
 function ProgressReport({patientId, patientName}) {
-  const logs = DB.getMoodLogs(patientId);
-  const user = DB.users.find(u=>u.id===patientId);
-  if(!user) return null;
+  const [logs, setLogs] = useState([]);
+  useEffect(()=>{ DB.getMoodLogs(patientId).then(d=>setLogs(d||[])).catch(()=>{}); },[patientId]);
 
-  const last7=[...logs].sort((a,b)=>b.date.localeCompare(a.date)).slice(0,7).reverse();
-  const avg=logs.length>0?(logs.reduce((s,l)=>s+l.mood,0)/logs.length).toFixed(1):"—";
-  const avgEnergy=logs.length>0?(logs.reduce((s,l)=>s+l.energy,0)/logs.length).toFixed(1):"—";
-  const avgSleep=logs.length>0?(logs.reduce((s,l)=>s+l.sleep,0)/logs.length).toFixed(1):"—";
-  const topTags=[...logs.flatMap(l=>l.tags||[])].reduce((acc,t)=>{acc[t]=(acc[t]||0)+1;return acc;},{});
+  const last7=[...logs].sort((a,b)=>(b.log_date||b.date||"").localeCompare(a.log_date||a.date||"")).slice(0,7).reverse();
+  const avg=logs.length>0?(logs.reduce((s,l)=>s+(l.mood||0),0)/logs.length).toFixed(1):"—";
+  const avgEnergy=logs.length>0?(logs.reduce((s,l)=>s+(l.energy||0),0)/logs.length).toFixed(1):"—";
+  const avgSleep=logs.length>0?(logs.reduce((s,l)=>s+(l.sleep_hours||l.sleep||0),0)/logs.length).toFixed(1):"—";
+  const topTags=[...logs.flatMap(l=>Array.isArray(l.tags)?l.tags:[])].reduce((acc,t)=>{acc[t]=(acc[t]||0)+1;return acc;},{});
   const sortedTags=Object.entries(topTags).sort((a,b)=>b[1]-a[1]).slice(0,5);
 
   return (
@@ -3227,8 +3226,8 @@ function DocPatientsWithReport({doc}) {
   const patientNames=[...new Set(appts.map(a=>a.patientName))];
   const patients=patientNames.map(name=>{
     const pAppts=appts.filter(a=>a.patientName===name);
-    const user=DB.users.find(u=>u.fullName===name);
-    return {name,appts:pAppts,user,lastSeen:pAppts[pAppts.length-1]?.date||"",total:pAppts.length};
+    const user={id:pAppts[0]?.patient_id||pAppts[0]?.patientId||null, fullName:name};
+    return {name,appts:pAppts,user,lastSeen:pAppts[pAppts.length-1]?.appointment_date||pAppts[pAppts.length-1]?.date||"",total:pAppts.length};
   });
 
   if(viewing) return (
